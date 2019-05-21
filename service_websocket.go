@@ -39,7 +39,8 @@ func (as *apiService) DepthWebsocket(dwr DepthWebsocketRequest) (chan *DepthEven
 					Type          string          `json:"e"`
 					Time          float64         `json:"E"`
 					Symbol        string          `json:"s"`
-					UpdateID      int             `json:"u"`
+					UpdateID      int             `json:"U"`
+					LastUpdateID  int             `json:"u"`
 					BidDepthDelta [][]interface{} `json:"b"`
 					AskDepthDelta [][]interface{} `json:"a"`
 				}{}
@@ -60,6 +61,9 @@ func (as *apiService) DepthWebsocket(dwr DepthWebsocketRequest) (chan *DepthEven
 					},
 					UpdateID: rawDepth.UpdateID,
 				}
+
+				de.OrderBook.LastUpdateID = rawDepth.LastUpdateID
+
 				for _, b := range rawDepth.BidDepthDelta {
 					p, err := floatFromString(b[0])
 					if err != nil {
