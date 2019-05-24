@@ -31,6 +31,7 @@ func (as *apiService) DepthWebsocket(dwr DepthWebsocketRequest) (chan *DepthEven
 				return
 			default:
 				_, message, err := c.ReadMessage()
+				as.Logger.Log(message)
 				if err != nil {
 					level.Error(as.Logger).Log("wsRead", err)
 					return
@@ -330,6 +331,93 @@ func (as *apiService) TradeWebsocket(twr TradeWebsocketRequest) (chan *AggTradeE
 
 	go as.exitHandler(c, done)
 	return aggtech, done, nil
+}
+
+func (as *apiService) SingleTradeWebsocket(twr TradeWebsocketRequest) (chan *SingleTradeEvent, chan struct{}, error) {
+	url := fmt.Sprintf("wss://stream.binance.com:9443/ws/%s@trade", strings.ToLower(twr.Symbol))
+	c, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		log.Fatal("dial:", err)
+	}
+
+	done := make(chan struct{})
+	stch := make(chan *SingleTradeEvent)
+
+	go func() {
+		defer c.Close()
+		defer close(done)
+		for {
+			select {
+			case <-as.Ctx.Done():
+				level.Info(as.Logger).Log("closing reader")
+				return
+			default:
+				_, message, err := c.ReadMessage()
+				if err != nil {
+					level.Error(as.Logger).Log("wsRead", err)
+					return
+				}
+				rawSingleTrade := struct {
+					Type         string  `json:"e"`
+					Time         float64 `json:"E"`
+					Symbol       string  `json:"s"`
+					TradeID      int     `json:"t"`
+					Price        string  `json:"p"`
+					Quantity     string  `json:"q"`
+					BuyerOrderID int     `json:"b"`
+					SellerOrdrID int     `json:"a"`
+					Timestamp    float64 `json:"T"`
+					BuyerMaker   bool    `json:"m"`
+				}{}
+				if err := json.Unmarshal(message, &rawSingleTrade); err != nil {
+					level.Error(as.Logger).Log("wsUnmarshal", err, "body", string(message))
+					return
+				}
+				t, err := timeFromUnixTimestampFloat(rawSingleTrade.Time)
+				if err != nil {
+					level.Error(as.Logger).Log("wsUnmarshal", err, "body", rawSingleTrade.Time)
+					return
+				}
+
+				price, err := floatFromString(rawSingleTrade.Price)
+				if err != nil {
+					level.Error(as.Logger).Log("wsUnmarshal", err, "body", rawSingleTrade.Price)
+					return
+				}
+				qty, err := floatFromString(rawSingleTrade.Quantity)
+				if err != nil {
+					level.Error(as.Logger).Log("wsUnmarshal", err, "body", rawSingleTrade.Quantity)
+					return
+				}
+				ts, err := timeFromUnixTimestampFloat(rawSingleTrade.Timestamp)
+				if err != nil {
+					level.Error(as.Logger).Log("wsUnmarshal", err, "body", rawSingleTrade.Timestamp)
+					return
+				}
+
+				ste := &SingleTradeEvent{
+					WSEvent: WSEvent{
+						Type:   rawSingleTrade.Type,
+						Time:   t,
+						Symbol: rawSingleTrade.Symbol,
+					},
+					SingleTrade: SingleTrade{
+						ID:            rawSingleTrade.TradeID,
+						Price:         price,
+						Quantity:      qty,
+						BuyerOrderID:  rawSingleTrade.BuyerOrderID,
+						SellerOrderID: rawSingleTrade.SellerOrdrID,
+						Timestamp:     ts,
+						BuyerMaker:    rawSingleTrade.BuyerMaker,
+					},
+				}
+				stch <- ste
+			}
+		}
+	}()
+
+	go as.exitHandler(c, done)
+	return stch, done, nil
 }
 
 func (as *apiService) UserDataWebsocket(urwr UserDataWebsocketRequest) (chan *AccountEvent, chan struct{}, error) {

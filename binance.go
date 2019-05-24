@@ -65,6 +65,7 @@ type Binance interface {
 	DepthWebsocket(dwr DepthWebsocketRequest) (chan *DepthEvent, chan struct{}, error)
 	KlineWebsocket(kwr KlineWebsocketRequest) (chan *KlineEvent, chan struct{}, error)
 	TradeWebsocket(twr TradeWebsocketRequest) (chan *AggTradeEvent, chan struct{}, error)
+	SingleTradeWebsocket(twr TradeWebsocketRequest) (chan *SingleTradeEvent, chan struct{}, error)
 	UserDataWebsocket(udwr UserDataWebsocketRequest) (chan *AccountEvent, chan struct{}, error)
 }
 
@@ -145,6 +146,21 @@ type AggTrade struct {
 type AggTradeEvent struct {
 	WSEvent
 	AggTrade
+}
+
+type SingleTrade struct {
+	ID            int
+	Price         float64
+	Quantity      float64
+	BuyerOrderID  int
+	SellerOrderID int
+	Timestamp     time.Time
+	BuyerMaker    bool
+}
+
+type SingleTradeEvent struct {
+	WSEvent
+	SingleTrade
 }
 
 // AggTradesRequest represents AggTrades request data.
@@ -538,6 +554,10 @@ type TradeWebsocketRequest struct {
 
 func (b *binance) TradeWebsocket(twr TradeWebsocketRequest) (chan *AggTradeEvent, chan struct{}, error) {
 	return b.Service.TradeWebsocket(twr)
+}
+
+func (b *binance) SingleTradeWebsocket(twr TradeWebsocketRequest) (chan *SingleTradeEvent, chan struct{}, error) {
+	return b.Service.SingleTradeWebsocket(twr)
 }
 
 type UserDataWebsocketRequest struct {
