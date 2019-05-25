@@ -31,7 +31,6 @@ func (as *apiService) DepthWebsocket(dwr DepthWebsocketRequest) (chan *DepthEven
 				return
 			default:
 				_, message, err := c.ReadMessage()
-				as.Logger.Log(message)
 				if err != nil {
 					level.Error(as.Logger).Log("wsRead", err)
 					return
