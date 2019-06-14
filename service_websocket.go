@@ -9,6 +9,8 @@ import (
 
 	"github.com/go-kit/kit/log/level"
 	"github.com/gorilla/websocket"
+	"github.com/mitchellh/mapstructure"
+	"github.com/pkg/errors"
 )
 
 func (as *apiService) DepthWebsocket(dwr DepthWebsocketRequest) (chan *DepthEvent, chan struct{}, error) {
@@ -419,7 +421,7 @@ func (as *apiService) SingleTradeWebsocket(twr TradeWebsocketRequest) (chan *Sin
 	return stch, done, nil
 }
 
-func (as *apiService) UserDataWebsocket(urwr UserDataWebsocketRequest) (chan *AccountEvent, chan struct{}, error) {
+func (as *apiService) UserDataWebsocket(urwr UserDataWebsocketRequest) (*UserDataEventChannels, chan struct{}, error) {
 	url := fmt.Sprintf("wss://stream.binance.com:9443/ws/%s", urwr.ListenKey)
 	c, _, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
@@ -427,11 +429,15 @@ func (as *apiService) UserDataWebsocket(urwr UserDataWebsocketRequest) (chan *Ac
 	}
 
 	done := make(chan struct{})
-	aech := make(chan *AccountEvent)
+	udechan := &UserDataEventChannels{
+		AccountEventChan:      make(chan *AccountEvent),
+		UpdatedOrderEventChan: make(chan *UpdatedOrderEvent),
+	}
 
 	go func() {
 		defer c.Close()
 		defer close(done)
+		untypedMsg := make(map[string]interface{})
 		for {
 			select {
 			case <-as.Ctx.Done():
@@ -443,72 +449,215 @@ func (as *apiService) UserDataWebsocket(urwr UserDataWebsocketRequest) (chan *Ac
 					level.Error(as.Logger).Log("wsRead", err)
 					return
 				}
-				rawAccount := struct {
-					Type            string  `json:"e"`
-					Time            float64 `json:"E"`
-					OpenTime        float64 `json:"t"`
-					MakerCommision  int64   `json:"m"`
-					TakerCommision  int64   `json:"t"`
-					BuyerCommision  int64   `json:"b"`
-					SellerCommision int64   `json:"s"`
-					CanTrade        bool    `json:"T"`
-					CanWithdraw     bool    `json:"W"`
-					CanDeposit      bool    `json:"D"`
-					Balances        []struct {
-						Asset            string `json:"a"`
-						AvailableBalance string `json:"f"`
-						Locked           string `json:"l"`
-					} `json:"B"`
-				}{}
-				if err := json.Unmarshal(message, &rawAccount); err != nil {
-					level.Error(as.Logger).Log("wsUnmarshal", err, "body", string(message))
-					return
-				}
-				t, err := timeFromUnixTimestampFloat(rawAccount.Time)
-				if err != nil {
-					level.Error(as.Logger).Log("wsUnmarshal", err, "body", rawAccount.Time)
+
+				if err := json.Unmarshal(message, &untypedMsg); err != nil {
+					level.Error(as.Logger).Log("wsRawMessageDecode", err)
 					return
 				}
 
-				ae := &AccountEvent{
-					WSEvent: WSEvent{
-						Type: rawAccount.Type,
-						Time: t,
-					},
-					Account: Account{
-						MakerCommision:  rawAccount.MakerCommision,
-						TakerCommision:  rawAccount.TakerCommision,
-						BuyerCommision:  rawAccount.BuyerCommision,
-						SellerCommision: rawAccount.SellerCommision,
-						CanTrade:        rawAccount.CanTrade,
-						CanWithdraw:     rawAccount.CanWithdraw,
-						CanDeposit:      rawAccount.CanDeposit,
-					},
-				}
-				for _, b := range rawAccount.Balances {
-					free, err := floatFromString(b.AvailableBalance)
+				switch untypedMsg["e"] {
+				case "outboundAccountInfo":
+					achan, err := as.mapAccountEvent(untypedMsg)
 					if err != nil {
-						level.Error(as.Logger).Log("wsUnmarshal", err, "body", b.AvailableBalance)
+						level.Error(as.Logger).Log("wsAccountEventDecode", err)
 						return
 					}
-					locked, err := floatFromString(b.Locked)
+					udechan.AccountEventChan <- achan
+				case "executionReport":
+					uochan, err := as.mapUpdatedOrderEvent(untypedMsg)
 					if err != nil {
-						level.Error(as.Logger).Log("wsUnmarshal", err, "body", b.Locked)
+						level.Error(as.Logger).Log("wsUpdatedOrderEventDecode", err)
 						return
 					}
-					ae.Balances = append(ae.Balances, &Balance{
-						Asset:  b.Asset,
-						Free:   free,
-						Locked: locked,
-					})
+					udechan.UpdatedOrderEventChan <- uochan
+				default:
+					level.Error(as.Logger).Log("wsUserDataStreem", fmt.Sprintf("Not implemented event: %s", untypedMsg["e"]))
+					return
 				}
-				aech <- ae
 			}
 		}
 	}()
 
 	go as.exitHandler(c, done)
-	return aech, done, nil
+	return udechan, done, nil
+}
+
+func (as *apiService) mapAccountEvent(untypedMsg map[string]interface{}) (*AccountEvent, error) {
+	ae := &AccountEvent{}
+
+	rawAccount := struct {
+		Type             string                   `mapstructure:"e"`
+		Time             float64                  `mapstructure:"E"`
+		MakerCommission  int64                    `mapstructure:"m"`
+		TakerCommission  int64                    `mapstructure:"t"`
+		BuyerCommission  int64                    `mapstructure:"b"`
+		SellerCommission int64                    `mapstructure:"s"`
+		CanTrade         bool                     `mapstructure:"T"`
+		CanWithdraw      bool                     `mapstructure:"W"`
+		CanDeposit       bool                     `mapstructure:"D"`
+		Balances         []map[string]interface{} `mapstructure:"B"`
+	}{}
+
+	decoderConf := &mapstructure.DecoderConfig{
+		Result:           &rawAccount,
+		WeaklyTypedInput: true,
+	}
+
+	decoder, err := mapstructure.NewDecoder(decoderConf)
+
+	if err != nil {
+		return ae, err
+	}
+
+	err = decoder.Decode(untypedMsg)
+
+	if err != nil {
+		return ae, err
+	}
+
+	t, err := timeFromUnixTimestampFloat(rawAccount.Time)
+	if err != nil {
+		return ae, errors.Wrapf(err, "AccountEventMappingError (field Time)")
+	}
+
+	ae.WSEvent = WSEvent{
+		Type: rawAccount.Type,
+		Time: t,
+	}
+
+	ae.Account = Account{
+		MakerCommision:  rawAccount.MakerCommission,
+		TakerCommision:  rawAccount.TakerCommission,
+		BuyerCommision:  rawAccount.BuyerCommission,
+		SellerCommision: rawAccount.SellerCommission,
+		CanTrade:        rawAccount.CanTrade,
+		CanWithdraw:     rawAccount.CanWithdraw,
+		CanDeposit:      rawAccount.CanDeposit,
+	}
+
+	for _, b := range rawAccount.Balances {
+		free, err := floatFromString(b["f"].(string))
+		if err != nil {
+			return ae, errors.Wrapf(err, "AccountEventMappingError (field f)")
+		}
+		locked, err := floatFromString(b["l"].(string))
+		if err != nil {
+			return ae, errors.Wrapf(err, "AccountEventMappingError (field l)")
+		}
+		asset, ok := b["a"].(string)
+		if !ok {
+			return ae, fmt.Errorf("AccountEventMappingError (field a). Asset is not string")
+		}
+		ae.Balances = append(ae.Balances, &Balance{
+			Asset:  asset,
+			Free:   free,
+			Locked: locked,
+		})
+	}
+	return ae, nil
+}
+
+func (as *apiService) mapUpdatedOrderEvent(untypedMsg map[string]interface{}) (*UpdatedOrderEvent, error) {
+	uoe := &UpdatedOrderEvent{}
+
+	rawUpdatedOrder := struct {
+		Type                              string  `mapstructure:"e"` // Event type
+		Time                              float64 `mapstructure:"E"` // Event time
+		Symbol                            string  `mapstructure:"s"` // Symbol
+		ClientOrderID                     string  `mapstructure:"c"` // Client order ID
+		Side                              string  `mapstructure:"S"` // Side
+		OrderType                         string  `mapstructure:"o"` // Order type
+		TimeInForce                       string  `mapstructure:"f"` // Time in force
+		Qty                               float64 `mapstructure:"q"` // Order quantity
+		Price                             float64 `mapstructure:"p"` // Order price
+		StopPrice                         float64 `mapstructure:"P"` // Stop price
+		IcebergQty                        float64 `mapstructure:"F"` // Iceberg quantity
+		OriginalClientOrderID             string  `mapstructure:"C"` // Original client order ID; This is the ID of the order being canceled
+		CurrentExecutionType              string  `mapstructure:"x"` // Current execution type
+		CurrentOrderStatus                string  `mapstructure:"X"` // Current order status
+		OrderRejectReason                 string  `mapstructure:"r"` // Order reject reason; will be an error code.
+		OrderID                           int64   `mapstructure:"i"` // Order ID
+		LastExecutedQty                   float64 `mapstructure:"l"` // Last executed quantity
+		CumulativeFilledQty               float64 `mapstructure:"z"` // Cumulative filled quantity
+		LastExecutedPrice                 float64 `mapstructure:"L"` // Last executed price
+		CommissionAmount                  float64 `mapstructure:"n"` // Commission amount
+		CommissionAsset                   string  `mapstructure:"N"` // Commission asset
+		TransactionTime                   float64 `mapstructure:"T"` // Transaction time
+		TradeId                           int64   `mapstructure:"t"` // Trade ID
+		IsOrderWorking                    bool    `mapstructure:"w"` // Is the order working? Stops will have
+		IsMakerSide                       bool    `mapstructure:"m"` // Is this trade the maker side?
+		CreatedTime                       float64 `mapstructure:"O"` // Order creation time
+		CumulativeQuoteAssetTransactedQty float64 `mapstructure:"Z"` // Cumulative quote asset transacted quantity
+		LastQuoteAssetTransactedQty       float64 `mapstructure:"Y"` // Last quote asset transacted quantity (i.e. lastPrice * lastQty)
+	}{}
+
+	decoderConf := &mapstructure.DecoderConfig{
+		Result:           &rawUpdatedOrder,
+		WeaklyTypedInput: true,
+	}
+
+	decoder, err := mapstructure.NewDecoder(decoderConf)
+
+	if err != nil {
+		return uoe, err
+	}
+
+	err = decoder.Decode(untypedMsg)
+
+	if err != nil {
+		return uoe, err
+	}
+
+	t, err := timeFromUnixTimestampFloat(rawUpdatedOrder.Time)
+	if err != nil {
+		return uoe, errors.Wrapf(err, "UpdatedOrderEventMappingError")
+	}
+
+	tt, err := timeFromUnixTimestampFloat(rawUpdatedOrder.TransactionTime)
+	if err != nil {
+		return uoe, errors.Wrapf(err, "UpdatedOrderEventMappingError")
+	}
+
+	oct, err := timeFromUnixTimestampFloat(rawUpdatedOrder.CreatedTime)
+	if err != nil {
+		return uoe, errors.Wrapf(err, "UpdatedOrderEventMappingError")
+	}
+
+	uoe.WSEvent = WSEvent{
+		Type: rawUpdatedOrder.Type,
+		Time: t,
+	}
+
+	uoe.UpdatedOrder = UpdatedOrder{
+		Symbol:                            rawUpdatedOrder.Symbol,
+		OrderID:                           rawUpdatedOrder.OrderID,
+		ClientOrderID:                     rawUpdatedOrder.ClientOrderID,
+		OriginalClientOrderID:             rawUpdatedOrder.OriginalClientOrderID,
+		Side:                              OrderSide(rawUpdatedOrder.Side),
+		Type:                              OrderType(rawUpdatedOrder.OrderType),
+		TimeInForce:                       TimeInForce(rawUpdatedOrder.TimeInForce),
+		Qty:                               rawUpdatedOrder.Qty,
+		Price:                             rawUpdatedOrder.Price,
+		StopPrice:                         rawUpdatedOrder.StopPrice,
+		IcebergQty:                        rawUpdatedOrder.IcebergQty,
+		CurrentExecutionType:              rawUpdatedOrder.CurrentExecutionType,
+		CurrentOrderStatus:                OrderStatus(rawUpdatedOrder.CurrentOrderStatus),
+		OrderRejectReason:                 rawUpdatedOrder.OrderRejectReason,
+		CumulativeFilledQty:               rawUpdatedOrder.CumulativeFilledQty,
+		LastExecutedQty:                   rawUpdatedOrder.LastExecutedQty,
+		LastExecutedPrice:                 rawUpdatedOrder.LastExecutedPrice,
+		CommissionAmount:                  rawUpdatedOrder.CommissionAmount,
+		CommissionAsset:                   rawUpdatedOrder.CommissionAsset,
+		TransactionTime:                   tt,
+		TradeId:                           rawUpdatedOrder.TradeId,
+		IsOrderWorking:                    rawUpdatedOrder.IsOrderWorking,
+		IsMakerSide:                       rawUpdatedOrder.IsMakerSide,
+		CreatedTime:                       oct,
+		CumulativeQuoteAssetTransactedQty: rawUpdatedOrder.CumulativeQuoteAssetTransactedQty,
+		LastQuoteAssetTransactedQty:       rawUpdatedOrder.LastQuoteAssetTransactedQty,
+	}
+
+	return uoe, nil
 }
 
 func (as *apiService) exitHandler(c *websocket.Conn, done chan struct{}) {

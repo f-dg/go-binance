@@ -66,7 +66,7 @@ type Binance interface {
 	KlineWebsocket(kwr KlineWebsocketRequest) (chan *KlineEvent, chan struct{}, error)
 	TradeWebsocket(twr TradeWebsocketRequest) (chan *AggTradeEvent, chan struct{}, error)
 	SingleTradeWebsocket(twr TradeWebsocketRequest) (chan *SingleTradeEvent, chan struct{}, error)
-	UserDataWebsocket(udwr UserDataWebsocketRequest) (chan *AccountEvent, chan struct{}, error)
+	UserDataWebsocket(udwr UserDataWebsocketRequest) (*UserDataEventChannels, chan struct{}, error)
 }
 
 type binance struct {
@@ -328,6 +328,36 @@ type ExecutedOrder struct {
 	Time          time.Time
 }
 
+// UpdatedOrder represents data about updated order.
+type UpdatedOrder struct {
+	Symbol                            string
+	OrderID                           int64
+	ClientOrderID                     string
+	OriginalClientOrderID             string
+	Side                              OrderSide
+	Type                              OrderType
+	TimeInForce                       TimeInForce
+	Qty                               float64
+	Price                             float64
+	StopPrice                         float64
+	IcebergQty                        float64
+	CurrentExecutionType              string
+	CurrentOrderStatus                OrderStatus
+	OrderRejectReason                 string
+	LastExecutedQty                   float64
+	CumulativeFilledQty               float64
+	LastExecutedPrice                 float64
+	CommissionAmount                  float64
+	CommissionAsset                   string
+	TransactionTime                   time.Time
+	TradeId                           int64
+	IsOrderWorking                    bool
+	IsMakerSide                       bool
+	CreatedTime                       time.Time
+	CumulativeQuoteAssetTransactedQty float64
+	LastQuoteAssetTransactedQty       float64
+}
+
 // QueryOrder returns data about existing order.
 func (b *binance) QueryOrder(qor QueryOrderRequest) (*ExecutedOrder, error) {
 	return b.Service.QueryOrder(qor)
@@ -403,6 +433,16 @@ type Account struct {
 type AccountEvent struct {
 	WSEvent
 	Account
+}
+
+type UpdatedOrderEvent struct {
+	WSEvent
+	UpdatedOrder
+}
+
+type UserDataEventChannels struct {
+	AccountEventChan      chan *AccountEvent
+	UpdatedOrderEventChan chan *UpdatedOrderEvent
 }
 
 // Balance groups balance-related information.
@@ -564,6 +604,6 @@ type UserDataWebsocketRequest struct {
 	ListenKey string
 }
 
-func (b *binance) UserDataWebsocket(udwr UserDataWebsocketRequest) (chan *AccountEvent, chan struct{}, error) {
+func (b *binance) UserDataWebsocket(udwr UserDataWebsocketRequest) (*UserDataEventChannels, chan struct{}, error) {
 	return b.Service.UserDataWebsocket(udwr)
 }
