@@ -480,3 +480,92 @@ func (as *apiService) TickerAllBooks() ([]*BookTicker, error) {
 	}
 	return btc, nil
 }
+
+func (as *apiService) ExchangeInfo() (ei *ExchangeInfo, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("recover from panic: %v", p)
+		}
+	}()
+
+	params := make(map[string]string)
+
+	res, err := as.request("GET", "api/v3/exchangeInfo", params, false, false)
+	if err != nil {
+		return
+	}
+
+	textRes, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		err = errors.Wrap(err, "unable to read response from exchangeInfo")
+		return
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != 200 {
+		err = as.handleError(textRes)
+		return
+	}
+
+	rawEInfo := struct {
+		ExchangeFilters []interface{} `json:"exchangeFilters"`
+		RateLimits      []*RateLimit  `json:"rateLimits"`
+		ServerTime      float64       `json:"serverTime"`
+		Symbols         []struct {
+			BaseAsset              string      `json:"baseAsset"`
+			BaseAssetPrecision     int         `json:"baseAssetPrecision"`
+			Filters                []*Filter   `json:"filters"`
+			IcebergAllowed         bool        `json:"icebergAllowed"`
+			IsMarginTradingAllowed bool        `json:"isMarginTradingAllowed"`
+			IsSpotTradingAllowed   bool        `json:"isSpotTradingAllowed"`
+			OcoAllowed             bool        `json:"ocoAllowed"`
+			OrderTypes             []OrderType `json:"orderTypes"`
+			QuoteAsset             string      `json:"quoteAsset"`
+			QuotePrecision         int         `json:"quotePrecision"`
+			Status                 string      `json:"status"`
+			Symbol                 string      `json:"symbol"`
+		}
+		Timezone string `json:"timezone"`
+	}{}
+
+	if err = json.Unmarshal(textRes, &rawEInfo); err != nil {
+		err = errors.Wrap(err, "rawExchangeInfo unmarshal error")
+		return
+	}
+
+	ei = &ExchangeInfo{
+		ExchangeFilters: rawEInfo.ExchangeFilters,
+		Timezone:        rawEInfo.Timezone,
+		RateLimits:      rawEInfo.RateLimits,
+	}
+
+	t, err := timeFromUnixTimestampFloat(rawEInfo.ServerTime)
+
+	if err != nil {
+		err = errors.Wrap(err, "unablable to convert ServerTime")
+		return
+	}
+
+	ei.ServerTime = t
+
+	for _, s := range rawEInfo.Symbols {
+		sym := &Symbol{
+			BaseAsset:              s.BaseAsset,
+			BaseAssetPrecision:     s.BaseAssetPrecision,
+			IcebergAllowed:         s.IcebergAllowed,
+			IsMarginTradingAllowed: s.IsMarginTradingAllowed,
+			IsSpotTradingAllowed:   s.IsSpotTradingAllowed,
+			OcoAllowed:             s.OcoAllowed,
+			QuoteAsset:             s.QuoteAsset,
+			QuotePrecision:         s.QuotePrecision,
+			Status:                 s.Status,
+			Symbol:                 s.Symbol,
+			Filters:                s.Filters,
+			OrderTypes:             s.OrderTypes,
+		}
+
+		ei.Symbols = append(ei.Symbols, sym)
+	}
+
+	return
+}

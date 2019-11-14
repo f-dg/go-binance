@@ -47,6 +47,7 @@ type Service interface {
 	TradeWebsocket(twr TradeWebsocketRequest) (chan *AggTradeEvent, chan struct{}, error)
 	SingleTradeWebsocket(twr TradeWebsocketRequest) (chan *SingleTradeEvent, chan struct{}, error)
 	UserDataWebsocket(udwr UserDataWebsocketRequest) (*UserDataEventChannels, chan struct{}, error)
+	ExchangeInfo() (*ExchangeInfo, error)
 }
 
 type apiService struct {

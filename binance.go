@@ -1,8 +1,14 @@
 package binance
 
 import (
+	"encoding/json"
 	"fmt"
+	"reflect"
+	"strconv"
+	"strings"
 	"time"
+
+	"github.com/pkg/errors"
 )
 
 // Binance is wrapper for Binance API.
@@ -67,6 +73,7 @@ type Binance interface {
 	TradeWebsocket(twr TradeWebsocketRequest) (chan *AggTradeEvent, chan struct{}, error)
 	SingleTradeWebsocket(twr TradeWebsocketRequest) (chan *SingleTradeEvent, chan struct{}, error)
 	UserDataWebsocket(udwr UserDataWebsocketRequest) (*UserDataEventChannels, chan struct{}, error)
+	ExchangeInfo() (*ExchangeInfo, error)
 }
 
 type binance struct {
@@ -606,4 +613,172 @@ type UserDataWebsocketRequest struct {
 
 func (b *binance) UserDataWebsocket(udwr UserDataWebsocketRequest) (*UserDataEventChannels, chan struct{}, error) {
 	return b.Service.UserDataWebsocket(udwr)
+}
+
+func (b *binance) ExchangeInfo() (*ExchangeInfo, error) {
+	return b.Service.ExchangeInfo()
+}
+
+type ExchangeInfo struct {
+	ExchangeFilters []interface{} // not implemented
+	RateLimits      []*RateLimit
+	ServerTime      time.Time
+	Symbols         []*Symbol
+	Timezone        string
+}
+
+type RateLimit struct {
+	Interval      string `json:"interval"`
+	IntervalNum   int    `json:"intervalNum"`
+	Limit         int    `json:"limit"`
+	RateLimitType string `json:"rateLimitType"`
+}
+
+type Symbol struct {
+	BaseAsset              string
+	BaseAssetPrecision     int
+	Filters                []*Filter
+	IcebergAllowed         bool
+	IsMarginTradingAllowed bool
+	IsSpotTradingAllowed   bool
+	OcoAllowed             bool
+	OrderTypes             []OrderType
+	QuoteAsset             string
+	QuotePrecision         int
+	Status                 string
+	Symbol                 string
+}
+
+type Filter struct {
+	FilterType       FilterType `json:"filterType"`
+	MaxPrice         string     `json:"maxPrice"`
+	MinPrice         string     `json:"minPrice"`
+	StepSize         string     `json:"stepSize"`
+	TickSize         string     `json:"tickSize"`
+	MaxQty           string     `json:"maxQty"`
+	MinQty           string     `json:"minQty"`
+	MinNotional      string     `json:"minNotional"`
+	MultiplierDown   string     `json:"multiplierDown"`
+	MultiplierUp     string     `json:"multiplierUp"`
+	ApplyToMarket    bool       `json:"applyToMarket"`
+	AvgPriceMins     int        `json:"avgPriceMins"`
+	Limit            int        `json:"limit"`
+	MaxNumAlgoOrders int        `json:"maxNumAlgoOrders"`
+}
+
+func (ei *ExchangeInfo) Symbol(sym string) (*Symbol, error) {
+	for _, s := range ei.Symbols {
+		if s.Symbol != sym {
+			continue
+		}
+		return s, nil
+	}
+	return nil, fmt.Errorf("Not found symbol %s", sym)
+}
+
+func (s *Symbol) Filter(ft FilterType) (*Filter, error) {
+	for _, f := range s.Filters {
+		if f.FilterType != ft {
+			continue
+		}
+
+		return f, nil
+	}
+	return nil, fmt.Errorf("Not found filter with type %s", ft)
+}
+
+func (f *Filter) UnmarshalJSON(data []byte) error {
+	var errs []string
+
+	errPrefix := "Failed to unmarshal Filter"
+	raw := map[string]interface{}{}
+	err := json.Unmarshal(data, &raw)
+
+	if err != nil {
+		return errors.Wrap(err, errPrefix)
+	}
+
+	rfl := reflect.ValueOf(f)
+
+	for fName, valI := range raw {
+		field := rfl.Elem().FieldByName(strings.Title(fName))
+
+		if !field.IsValid() {
+			errs = append(errs, fmt.Sprintf("field %s doesn't exist", fName))
+			continue
+		}
+
+		if !field.CanSet() {
+			errs = append(errs, fmt.Sprintf("field %s isn't settable", fName))
+			continue
+		}
+
+		valR := reflect.ValueOf(valI)
+
+		switch field.Kind() {
+		case reflect.Float64:
+			if valF, ok := valI.(float64); ok {
+				field.Set(reflect.ValueOf(valF).Convert(field.Type()))
+				continue
+			}
+
+			valS, ok := valI.(string)
+
+			if !ok {
+				errs = append(errs, fmt.Sprintf("%s cannot be converted to float64, received type is %s", fName, valR.Kind()))
+				continue
+			}
+
+			val, err := strconv.ParseFloat(valS, 64)
+
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("%s failed to parse into float64: %s", fName, err.Error()))
+				continue
+			}
+
+			field.Set(reflect.ValueOf(val).Convert(field.Type()))
+		case reflect.Int:
+			val, ok := valI.(int)
+
+			if !ok {
+
+				if val2, ok := valI.(float64); ok {
+					val = int(val2)
+				} else {
+					err := fmt.Sprintf("%s cannot be converted into int, received type is %s", fName, valR.Kind())
+					errs = append(errs, err)
+					continue
+				}
+			}
+
+			field.Set(reflect.ValueOf(val).Convert(field.Type()))
+		case reflect.String:
+			val, ok := valI.(string)
+
+			if !ok {
+				errs = append(errs, fmt.Sprintf("%s cannot be converted into string, received type is %s", fName, valR.Kind()))
+				continue
+			}
+
+			field.Set(reflect.ValueOf(val).Convert(field.Type()))
+		case reflect.Bool:
+			val, ok := valI.(bool)
+
+			if !ok {
+				errs = append(errs, fmt.Sprintf("%s cannot be converted into bool, received type is %s", fName, valR.Kind()))
+				continue
+			}
+
+			field.Set(reflect.ValueOf(val).Convert(field.Type()))
+		default:
+			errs = append(errs, fmt.Sprintf("field %s received not imlemented kind %s", fName, valR.Kind()))
+			continue
+		}
+	}
+
+	if len(errs) != 0 {
+		return fmt.Errorf("%s: %s", errPrefix, strings.Join(errs, "; "))
+	}
+
+	return nil
 }
