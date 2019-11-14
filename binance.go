@@ -651,15 +651,15 @@ type Symbol struct {
 
 type Filter struct {
 	FilterType       FilterType `json:"filterType"`
-	MaxPrice         string     `json:"maxPrice"`
-	MinPrice         string     `json:"minPrice"`
-	StepSize         string     `json:"stepSize"`
-	TickSize         string     `json:"tickSize"`
-	MaxQty           string     `json:"maxQty"`
-	MinQty           string     `json:"minQty"`
-	MinNotional      string     `json:"minNotional"`
-	MultiplierDown   string     `json:"multiplierDown"`
-	MultiplierUp     string     `json:"multiplierUp"`
+	MaxPrice         float64    `json:"maxPrice"`
+	MinPrice         float64    `json:"minPrice"`
+	StepSize         float64    `json:"stepSize"`
+	TickSize         float64    `json:"tickSize"`
+	MaxQty           float64    `json:"maxQty"`
+	MinQty           float64    `json:"minQty"`
+	MinNotional      float64    `json:"minNotional"`
+	MultiplierDown   float64    `json:"multiplierDown"`
+	MultiplierUp     float64    `json:"multiplierUp"`
 	ApplyToMarket    bool       `json:"applyToMarket"`
 	AvgPriceMins     int        `json:"avgPriceMins"`
 	Limit            int        `json:"limit"`
