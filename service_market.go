@@ -481,6 +481,48 @@ func (as *apiService) TickerAllBooks() ([]*BookTicker, error) {
 	return btc, nil
 }
 
+func (as *apiService) AvgPrice(ar AvgPriceRequest) (*AvgPrice, error) {
+	params := make(map[string]string)
+	params["symbol"] = ar.Symbol
+	res, err := as.request("GET", "api/v3/avgPrice", params, false, false)
+	if err != nil {
+		return nil, err
+	}
+	textRes, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to read response for AvgPrice")
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != 200 {
+		as.handleError(textRes)
+	}
+
+	raw := &struct {
+		Price string `json:"price"`
+		Mins  int    `json:"mins"`
+	}{}
+
+	if err := json.Unmarshal(textRes, raw); err != nil {
+		return nil, errors.Wrap(err, "timeResponse unmarshal failed")
+	}
+
+	ap := &AvgPrice{
+		Symbol: ar.Symbol,
+		Mins:   raw.Mins,
+	}
+
+	price, err := floatFromString(raw.Price)
+
+	if err != nil {
+		return nil, err
+	}
+
+	ap.Price = price
+
+	return ap, nil
+}
+
 func (as *apiService) ExchangeInfo() (ei *ExchangeInfo, err error) {
 	defer func() {
 		if p := recover(); p != nil {

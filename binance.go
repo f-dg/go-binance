@@ -36,6 +36,8 @@ type Binance interface {
 	TickerAllPrices() ([]*PriceTicker, error)
 	// TickerAllBooks returns tickers for all books.
 	TickerAllBooks() ([]*BookTicker, error)
+	// AvgPrice returnns weighted curred price for given symbol.
+	AvgPrice(ar AvgPriceRequest) (*AvgPrice, error)
 
 	// NewOrder places new order and returns ProcessedOrder.
 	NewOrder(nor NewOrderRequest) (*ProcessedOrder, error)
@@ -250,6 +252,21 @@ type Ticker24 struct {
 // Ticker24 returns 24hr price change statistics.
 func (b *binance) Ticker24(tr TickerRequest) (*Ticker24, error) {
 	return b.Service.Ticker24(tr)
+}
+
+// AvgPrice represents weighted current price for given symbol.
+type AvgPrice struct {
+	Symbol string
+	Price  float64
+	Mins   int
+}
+
+type AvgPriceRequest struct {
+	Symbol string
+}
+
+func (b *binance) AvgPrice(ar AvgPriceRequest) (*AvgPrice, error) {
+	return b.Service.AvgPrice(ar)
 }
 
 // PriceTicker represents ticker data for price.
