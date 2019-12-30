@@ -472,7 +472,6 @@ func (as *apiService) UserDataWebsocket(urwr UserDataWebsocketRequest) (*UserDat
 					udechan.UpdatedOrderEventChan <- uochan
 				default:
 					level.Error(as.Logger).Log("wsUserDataStreem", fmt.Sprintf("Not implemented event: %s", untypedMsg["e"]))
-					return
 				}
 			}
 		}
