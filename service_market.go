@@ -12,7 +12,7 @@ import (
 
 func (as *apiService) Ping() error {
 	params := make(map[string]string)
-	response, err := as.request("GET", "api/v1/ping", params, false, false)
+	_, err := as.request("GET", "api/v1/ping", params, false, false)
 	if err != nil {
 		return err
 	}
